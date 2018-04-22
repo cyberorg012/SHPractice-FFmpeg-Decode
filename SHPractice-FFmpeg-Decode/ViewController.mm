@@ -1,0 +1,179 @@
+//
+//  ViewController.m
+//  SHPractice-FFmpeg-Decode
+//
+//  Created by Shine on 14/04/2018.
+//  Copyright © 2018 shine. All rights reserved.
+//
+
+#import "ViewController.h"
+
+
+extern "C"
+{
+//解码需要引入的头文件
+#import "avformat.h"
+#import <libavcodec/avcodec.h>
+#import <libavformat/avformat.h>
+#import <libswscale/swscale.h>
+#import <libavutil/imgutils.h>
+}
+
+@interface ViewController ()
+
+@end
+
+@implementation ViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    
+    NSString *file = [[NSBundle mainBundle] pathForResource:@"download" ofType:@"mp4"];
+    NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) lastObject];
+    NSString *outFile = [docPath stringByAppendingPathComponent:@"test.yuv"];
+
+    [self ffpmegDecodeVideoInPath:file outPath:outFile];
+    
+}
+
+- (void)ffpmegDecodeVideoInPath:(NSString *)inPath outPath:(NSString *)outPath{
+    
+    /*解码步骤
+     1.注册组件(av_register_all());
+     2.打开封装格式。也就是打开文件。
+     3.查找视频流(视频中包含视频流,音频流，字幕流)
+     4.查找解码器
+     5.打开解码器
+     6.循环每一帧，去解码
+     7.解码完成，关闭资源
+     
+     */
+    
+    int operationResult = 0;
+    
+    //第一步:注册组件
+    av_register_all();
+    
+    
+    //第二步:打开文件
+    AVFormatContext *avformat_context = avformat_alloc_context();
+    const char *url = [inPath UTF8String];
+    operationResult = avformat_open_input(&avformat_context, url, NULL, NULL);   //avformatcontext传的是二级指针（可以复习下二级指针的知识)
+    if(operationResult != 0){
+        //        av_log(NULL, 1, "打开文件失败");
+        NSLog(@"打开文件失败");
+        return;
+    }
+    
+    //第三步:查找视频流
+     operationResult = avformat_find_stream_info(avformat_context, NULL);
+    if(operationResult != 0){
+//        av_log(NULL, 1, "查找视频流失败");
+        NSLog(@"查找视频流失败");
+        return;
+    }
+    
+    /* 第四步:查找解码器
+       * 查找视频流的index
+       * 根据视频流的index获取到avCodecContext
+       * 根据avCodecContext获取解码器
+     */
+    
+    int videoStremIndex = -1;
+    for(int i = 0 ; i < avformat_context->nb_streams; i++){
+        if(avformat_context -> streams[i] ->codec -> codec_type == AVMEDIA_TYPE_VIDEO){
+            videoStremIndex = i;   //拿到视频流的index
+            NSLog(@"获取到了视频流");
+            break;
+        }
+    }
+    
+    AVCodecContext *avcodec_context = avformat_context -> streams[videoStremIndex] -> codec;    //根据视频流的index拿到解码器上下文
+    AVCodec *decodeCodec = avcodec_find_decoder(avcodec_context -> codec_id);   //根据解码器上下文拿到解码器id ,然后得到解码器
+    
+    NSLog(@"解码器为%s",decodeCodec -> name);
+    //第五步:打开解码器
+    operationResult = avcodec_open2(avcodec_context, decodeCodec, NULL);
+    if(operationResult != 0){
+        //        av_log(NULL, 1, "打开解码器失败");
+        NSLog(@"打开解码器失败");
+        return;
+    }
+    
+    //第六步:开始解码
+    AVPacket *packet = (AVPacket *)av_malloc(sizeof(AVPacket));   //读取的一帧数据缓存区
+    AVFrame *avframe_in = av_frame_alloc();
+    
+    
+    AVFrame *avframe_yun420 = av_frame_alloc();
+    int bufferSize = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, avcodec_context -> width, avcodec_context -> height, 1);
+    uint8_t *data = (uint8_t *)av_malloc(bufferSize);
+    av_image_fill_arrays(avframe_yun420 -> data,
+                         avframe_yun420 -> linesize,
+                         data, AV_PIX_FMT_YUV420P,
+                         avcodec_context -> width,
+                         avcodec_context -> height,
+                         1);
+    
+    
+    //拿到格式转换上下文
+    SwsContext *sws_context = sws_getContext(avcodec_context -> width,
+                                             avcodec_context -> height,
+                                             avcodec_context -> pix_fmt,
+                                             avcodec_context -> width,
+                                             avcodec_context -> height,
+                                             AV_PIX_FMT_YUV420P,
+                                             SWS_BICUBIC,
+                                             NULL,
+                                             NULL,
+                                             NULL);
+    
+    
+    int y_size,u_size,v_size;
+    long decodeIndex = 0;
+    const char *outpath = [outPath UTF8String];
+    FILE *yuv420p_file = fopen(outpath, "wb+");
+    while (av_read_frame(avformat_context, packet) == 0) {
+        if(packet -> stream_index == videoStremIndex){  //如果是视频流
+            avcodec_send_packet(avcodec_context, packet);
+            operationResult = avcodec_receive_frame(avcodec_context, avframe_in);
+            if(operationResult == 0){   //解码成功
+                
+                //进行类型转换:将解码出来的原像素数据转成我们需要的yuv420格式
+                sws_scale(sws_context, avframe_in -> data, avframe_in ->linesize, 0, avcodec_context -> height, avframe_yun420 -> data, avframe_yun420 -> linesize);
+                
+                //格式已经转换完成，写入yuv420p文件到本地.
+                y_size = avcodec_context -> width * avcodec_context -> height;
+                u_size = y_size / 4;
+                v_size = y_size / 4;
+                fwrite(avframe_yun420 -> data[0], 1, y_size, yuv420p_file);
+                fwrite(avframe_yun420 -> data[1], 1, u_size, yuv420p_file);
+                fwrite(avframe_yun420 -> data[2], 1, v_size, yuv420p_file);
+                
+                decodeIndex++;
+                //                av_log(NULL, 1, "解码到第%ld帧了",decodeIndex);
+                NSLog(@"解码到第%ld帧了",decodeIndex);
+            }
+        }
+    }
+    
+    NSLog(@"关闭资源了");
+    
+    //第七步:关闭资源
+    av_packet_free(&packet);
+    fclose(yuv420p_file);
+    av_frame_free(&avframe_in);
+    av_frame_free(&avframe_yun420);
+    free(data);
+    avcodec_close(avcodec_context);
+    avformat_free_context(avformat_context);
+    
+}
+
+
+- (void)didReceiveMemoryWarning {
+    [super didReceiveMemoryWarning];
+}
+
+
+@end
