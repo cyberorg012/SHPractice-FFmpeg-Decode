@@ -105,11 +105,12 @@ extern "C"
     AVFrame *avframe_in = av_frame_alloc();
     
     
-    AVFrame *avframe_yun420 = av_frame_alloc();
+    //开辟转换格式yuv420需要的空间
+    AVFrame *avframe_yuv420 = av_frame_alloc();
     int bufferSize = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, avcodec_context -> width, avcodec_context -> height, 1);
     uint8_t *data = (uint8_t *)av_malloc(bufferSize);
-    av_image_fill_arrays(avframe_yun420 -> data,
-                         avframe_yun420 -> linesize,
+    av_image_fill_arrays(avframe_yuv420 -> data,
+                         avframe_yuv420 -> linesize,
                          data, AV_PIX_FMT_YUV420P,
                          avcodec_context -> width,
                          avcodec_context -> height,
@@ -140,15 +141,19 @@ extern "C"
             if(operationResult == 0){   //解码成功
                 
                 //进行类型转换:将解码出来的原像素数据转成我们需要的yuv420格式
-                sws_scale(sws_context, avframe_in -> data, avframe_in ->linesize, 0, avcodec_context -> height, avframe_yun420 -> data, avframe_yun420 -> linesize);
+                sws_scale(sws_context, avframe_in -> data, avframe_in ->linesize, 0, avcodec_context -> height, avframe_yuv420 -> data, avframe_yuv420 -> linesize);
                 
                 //格式已经转换完成，写入yuv420p文件到本地.
+                //  YUV: Y代表亮度,UV代表色度
+                // YUV420格式知识: 一个Y代表一个像素点,4个像素点对应一个U和V.  4*Y = U = V
                 y_size = avcodec_context -> width * avcodec_context -> height;
                 u_size = y_size / 4;
                 v_size = y_size / 4;
-                fwrite(avframe_yun420 -> data[0], 1, y_size, yuv420p_file);
-                fwrite(avframe_yun420 -> data[1], 1, u_size, yuv420p_file);
-                fwrite(avframe_yun420 -> data[2], 1, v_size, yuv420p_file);
+                
+                //依次写入Y、U、V部分
+                fwrite(avframe_yuv420 -> data[0], 1, y_size, yuv420p_file);
+                fwrite(avframe_yuv420 -> data[1], 1, u_size, yuv420p_file);
+                fwrite(avframe_yuv420 -> data[2], 1, v_size, yuv420p_file);
                 
                 decodeIndex++;
                 //                av_log(NULL, 1, "解码到第%ld帧了",decodeIndex);
@@ -157,13 +162,11 @@ extern "C"
         }
     }
     
-    NSLog(@"关闭资源了");
-    
     //第七步:关闭资源
     av_packet_free(&packet);
     fclose(yuv420p_file);
     av_frame_free(&avframe_in);
-    av_frame_free(&avframe_yun420);
+    av_frame_free(&avframe_yuv420);
     free(data);
     avcodec_close(avcodec_context);
     avformat_free_context(avformat_context);
