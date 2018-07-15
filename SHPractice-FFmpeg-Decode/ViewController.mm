@@ -20,7 +20,7 @@ extern "C"
 #import "SDL.h"
 }
 
-#define isOutputYUV420 1    //是否输出yuv420文件
+#define isOutputYUV420 0    //是否输出yuv420文件
 #define SFM_REFRESH_EVENT (SDL_USEREVENT + 1)
 #define SFM_BREAK_EVENT  (SDL_USEREVENT + 2)
 
@@ -46,27 +46,27 @@ int thread_pause=0;
 }
 
 
-int SDL_UpdateTexture(void *opaque){
-    thread_exit=0;
-    thread_pause=0;
-    
-    while (!thread_exit) {
-        if(!thread_pause){
-            SDL_Event event;
-            event.type = SFM_REFRESH_EVENT;
-            SDL_PushEvent(&event);
-        }
-        SDL_Delay(40);
-    }
-    thread_exit=0;
-    thread_pause=0;
-    //Break
-    SDL_Event event;
-    event.type = SFM_BREAK_EVENT;
-    SDL_PushEvent(&event);
-    
-    return 0;
-}
+//int SDL_UpdateTexture(void *opaque){
+//    thread_exit=0;
+//    thread_pause=0;
+//
+//    while (!thread_exit) {
+//        if(!thread_pause){
+//            SDL_Event event;
+//            event.type = SFM_REFRESH_EVENT;
+//            SDL_PushEvent(&event);
+//        }
+//        SDL_Delay(40);
+//    }
+//    thread_exit=0;
+//    thread_pause=0;
+//    //Break
+//    SDL_Event event;
+//    event.type = SFM_BREAK_EVENT;
+//    SDL_PushEvent(&event);
+//
+//    return 0;
+//}
 
 - (void)ffpmegDecodeVideoInPath:(NSString *)inPath outPath:(NSString *)outPath{
     
@@ -96,6 +96,8 @@ int SDL_UpdateTexture(void *opaque){
         NSLog(@"打开文件失败");
         return;
     }
+    
+    av_dump_format(avformat_context, 0, url, 0);
     
     //第三步:查找视频流
      operationResult = avformat_find_stream_info(avformat_context, NULL);
@@ -176,14 +178,14 @@ int SDL_UpdateTexture(void *opaque){
     int screen_height = avcodec_context -> height;
     
     //创建窗口
-    SDL_Window *window = SDL_CreateWindow("iOSSimplePlayer", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, screen_width, screen_height, SDL_WINDOW_OPENGL);
+    SDL_Window *window = SDL_CreateWindow("iOSSimplePlayer", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, screen_width, screen_height, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_OPENGL);
     
     
     if(!window){
         printf("SDL 创建window 失败 %s",SDL_GetError());
     }
     
-    SDL_Renderer *render = SDL_CreateRenderer(window, -2, 0);
+    SDL_Renderer *render = SDL_CreateRenderer(window, -1, 0);
     SDL_Texture *texture = SDL_CreateTexture(render, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, screen_width, screen_height);
     
     SDL_Rect rect;
@@ -192,77 +194,44 @@ int SDL_UpdateTexture(void *opaque){
     rect.w = screen_width;
     rect.h = screen_height;
     
-    SDL_Thread *thread = SDL_CreateThread(SDL_UpdateTexture, NULL, NULL);
-    SDL_Event event;
-    
-    for(;;){
-        SDL_WaitEvent(&event);
-        switch (event.type) {
-            case SFM_REFRESH_EVENT:{
-//                while (1) {
-//                    if(av_read_frame(avformat_context, packet)<0)
-//                        thread_exit=1;
-//
-//                    if(packet->stream_index==videoStremIndex)
-//                        break;
-//
-//                }
                 
-                while (av_read_frame(avformat_context, packet) == 0) {
-                    if(packet -> stream_index == videoStremIndex){  //如果是视频流
-                        avcodec_send_packet(avcodec_context, packet);
-                        operationResult = avcodec_receive_frame(avcodec_context, avframe_in);
-                        if(operationResult == 0){   //解码成功
-                            
-                            //进行类型转换:将解码出来的原像素数据转成我们需要的yuv420格式
-                            sws_scale(sws_context, avframe_in -> data, avframe_in ->linesize, 0, avcodec_context -> height, avframe_yuv420 -> data, avframe_yuv420 -> linesize);
-                            
+    while (av_read_frame(avformat_context, packet) == 0) {
+        if(packet -> stream_index == videoStremIndex){  //如果是视频流
+            avcodec_send_packet(avcodec_context, packet);
+            operationResult = avcodec_receive_frame(avcodec_context, avframe_in);
+            if(operationResult == 0){   //解码成功
+                
+                //进行类型转换:将解码出来的原像素数据转成我们需要的yuv420格式
+                sws_scale(sws_context, avframe_in -> data, avframe_in ->linesize, 0, avcodec_context -> height, avframe_yuv420 -> data, avframe_yuv420 -> linesize);
+                
 #if isOutputYUV420
-                            //格式已经转换完成，写入yuv420p文件到本地.
-                            //  YUV: Y代表亮度,UV代表色度
-                            // YUV420格式知识: 一个Y代表一个像素点,4个像素点对应一个U和V.  4*Y = U = V
-                            y_size = avcodec_context -> width * avcodec_context -> height;
-                            u_size = y_size / 4;
-                            v_size = y_size / 4;
-                            
-                            //依次写入Y、U、V部分
-                            fwrite(avframe_yuv420 -> data[0], 1, y_size, yuv420p_file);
-                            fwrite(avframe_yuv420 -> data[1], 1, u_size, yuv420p_file);
-                            fwrite(avframe_yuv420 -> data[2], 1, v_size, yuv420p_file);
-#endif
-                            
-                            SDL_UpdateTexture(texture, NULL, avframe_yuv420 -> data[0], avframe_yuv420 -> linesize[0]);
-                            SDL_RenderClear(render);
-                            SDL_RenderCopy(render, texture, NULL, NULL);
-                            SDL_RenderPresent(render);
-                            
-                            
-                            
-                            decodeIndex++;
-                            //                av_log(NULL, 1, "解码到第%ld帧了",decodeIndex);
-                            NSLog(@"解码到第%ld帧了",decodeIndex);
-                        }
-                    }
-                }
-            }
-        
-                break;
-                case SDL_KEYDOWN:
-            {
-                if(event.key.keysym.sym==SDLK_SPACE)
-                    thread_pause=!thread_pause;
-
-            }
-                break;
-            case SDL_QUIT:{
-                thread_exit = 1;
-            }
-                break;
-            case SFM_BREAK_EVENT:
-                break;
+                //格式已经转换完成，写入yuv420p文件到本地.
+                //  YUV: Y代表亮度,UV代表色度
+                // YUV420格式知识: 一个Y代表一个像素点,4个像素点对应一个U和V.  4*Y = U = V
+                y_size = avcodec_context -> width * avcodec_context -> height;
+                u_size = y_size / 4;
+                v_size = y_size / 4;
                 
-            default:
-                break;
+                //依次写入Y、U、V部分
+                fwrite(avframe_yuv420 -> data[0], 1, y_size, yuv420p_file);
+                fwrite(avframe_yuv420 -> data[1], 1, u_size, yuv420p_file);
+                fwrite(avframe_yuv420 -> data[2], 1, v_size, yuv420p_file);
+#endif
+                
+                SDL_UpdateTexture(texture, &rect, avframe_yuv420 -> data[0], avframe_yuv420 -> linesize[0]);
+                SDL_UpdateYUVTexture(texture, &rect, avframe_yuv420 -> data[0], avframe_yuv420 -> linesize[0], avframe_yuv420 -> data[1], avframe_yuv420 -> linesize[1], avframe_yuv420 -> data[2], avframe_yuv420 -> linesize [2]);
+
+                SDL_RenderClear(render);
+                SDL_RenderCopy(render, texture, &rect, &rect);
+                SDL_RenderPresent(render);
+                SDL_Delay(40);
+                
+                
+                
+                decodeIndex++;
+                //                av_log(NULL, 1, "解码到第%ld帧了",decodeIndex);
+                NSLog(@"解码到第%ld帧了",decodeIndex);
+            }
         }
     }
     
